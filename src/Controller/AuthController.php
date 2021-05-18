@@ -7,26 +7,21 @@ namespace Drupal\auth0\Controller;
  * Contains \Drupal\auth0\Controller\AuthController.
  */
 
-// Create a variable to store the path to this module.
-// Load vendor files if they exist.
-define('AUTH0_PATH', drupal_get_path('module', 'auth0'));
-
-if (file_exists(AUTH0_PATH . '/vendor/autoload.php')) {
-  require_once AUTH0_PATH . '/vendor/autoload.php';
-}
-
-use Drupal\Core\Controller\ControllerBase;
-use Drupal\Core\Url;
-use Drupal\user\Entity\User;
-use Drupal\user\PrivateTempStoreFactory;
-use Drupal\Core\Session\SessionManagerInterface;
-use Drupal\Core\Routing\TrustedRedirectResponse;
-use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\Controller\ControllerBase;
+use Drupal\Core\Database\Connection;
+use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+use Drupal\Core\PageCache\ResponsePolicyInterface;
 use Drupal\Core\Render\Markup;
-use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\RedirectResponse;
+use Drupal\Core\Routing\TrustedRedirectResponse;
+use Drupal\Core\Session\SessionManagerInterface;
+use Drupal\Core\StringTranslation\StringTranslationTrait;
+use Drupal\Core\TempStore\PrivateTempStoreFactory;
+use Drupal\user\Entity\User;
+use GuzzleHttp\Client;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\HttpFoundation\Request;
 
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
@@ -35,8 +30,6 @@ use Drupal\auth0\Event\Auth0UserSignupEvent;
 use Drupal\auth0\Event\Auth0UserPreLoginEvent;
 use Drupal\auth0\Exception\EmailNotSetException;
 use Drupal\auth0\Exception\EmailNotVerifiedException;
-use Drupal\Core\PageCache\ResponsePolicyInterface;
-use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\auth0\Util\AuthHelper;
 
 use Auth0\SDK\JWTVerifier;
@@ -44,7 +37,6 @@ use Auth0\SDK\Auth0;
 use Auth0\SDK\API\Authentication;
 use Auth0\SDK\API\Helpers\State\SessionStateHandler;
 use Auth0\SDK\Store\SessionStore;
-use GuzzleHttp\Client;
 
 /**
  * Controller routines for auth0 authentication.
@@ -169,7 +161,7 @@ class AuthController extends ControllerBase {
   /**
    * Initialize the controller.
    *
-   * @param \Drupal\user\PrivateTempStoreFactory $temp_store_factory
+   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $temp_store_factory
    *   The temp store factory.
    * @param \Drupal\Core\Session\SessionManagerInterface $session_manager
    *   The current session.
@@ -194,7 +186,8 @@ class AuthController extends ControllerBase {
     EventDispatcherInterface $event_dispatcher,
     ConfigFactoryInterface $config_factory,
     AuthHelper $auth0_helper,
-    Client $http_client
+    Client $http_client,
+    Connection $connection
   ) {
     // Ensure the pages this controller servers never gets cached.
     $page_cache->trigger();
@@ -217,6 +210,7 @@ class AuthController extends ControllerBase {
     $this->offlineAccess = FALSE || $this->config->get(AuthController::AUTH0_OFFLINE_ACCESS);
     $this->httpClient = $http_client;
     $this->auth0 = FALSE;
+    $this->connection = $connection;
   }
 
   /**
@@ -716,7 +710,8 @@ class AuthController extends ControllerBase {
    * Get the auth0 user profile.
    */
   protected function findAuth0User($id) {
-    $auth0_user = db_select('auth0_user', 'a')
+    $auth0_user = $this->connection
+      ->select('auth0_user', 'a')
       ->fields('a', ['drupal_id'])
       ->condition('auth0_id', $id, '=')
       ->execute()
@@ -732,7 +727,8 @@ class AuthController extends ControllerBase {
    *   The user info array.
    */
   protected function updateAuth0User(array $userInfo) {
-    db_update('auth0_user')
+    $this->connection
+      ->update('auth0_user')
       ->fields([
         'auth0_object' => serialize($userInfo),
       ])
@@ -929,7 +925,8 @@ class AuthController extends ControllerBase {
    */
   protected function insertAuth0User(array $userInfo, $uid) {
 
-    db_insert('auth0_user')->fields([
+    $this->connection
+      ->insert('auth0_user')->fields([
       'auth0_id' => $userInfo['user_id'],
       'drupal_id' => $uid,
       'auth0_object' => json_encode($userInfo),
