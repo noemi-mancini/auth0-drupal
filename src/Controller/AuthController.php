@@ -4,29 +4,24 @@ namespace Drupal\auth0\Controller;
 
 /**
  * @file
- * Contains \Drupal\auth0\Controller\AuthController.
+ * Contains Drupal\auth0\Controller\AuthController.
  */
 
-// Create a variable to store the path to this module.
-// Load vendor files if they exist.
-define('AUTH0_PATH', drupal_get_path('module', 'auth0'));
-
-if (file_exists(AUTH0_PATH . '/vendor/autoload.php')) {
-  require_once AUTH0_PATH . '/vendor/autoload.php';
-}
-
-use Drupal\Core\Controller\ControllerBase;
-use Drupal\Core\Url;
-use Drupal\user\Entity\User;
-use Drupal\user\PrivateTempStoreFactory;
-use Drupal\Core\Session\SessionManagerInterface;
-use Drupal\Core\Routing\TrustedRedirectResponse;
-use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\Controller\ControllerBase;
+use Drupal\Core\Database\Connection;
+use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+use Drupal\Core\PageCache\ResponsePolicyInterface;
 use Drupal\Core\Render\Markup;
-use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\RedirectResponse;
+use Drupal\Core\Routing\TrustedRedirectResponse;
+use Drupal\Core\Session\SessionManagerInterface;
+use Drupal\Core\StringTranslation\StringTranslationTrait;
+use Drupal\Core\TempStore\PrivateTempStoreFactory;
+use Drupal\user\Entity\User;
+use GuzzleHttp\Client;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\HttpFoundation\Request;
 
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
@@ -35,8 +30,6 @@ use Drupal\auth0\Event\Auth0UserSignupEvent;
 use Drupal\auth0\Event\Auth0UserPreLoginEvent;
 use Drupal\auth0\Exception\EmailNotSetException;
 use Drupal\auth0\Exception\EmailNotVerifiedException;
-use Drupal\Core\PageCache\ResponsePolicyInterface;
-use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\auth0\Util\AuthHelper;
 
 use Auth0\SDK\JWTVerifier;
@@ -44,7 +37,6 @@ use Auth0\SDK\Auth0;
 use Auth0\SDK\API\Authentication;
 use Auth0\SDK\API\Helpers\State\SessionStateHandler;
 use Auth0\SDK\Store\SessionStore;
-use GuzzleHttp\Client;
 
 /**
  * Controller routines for auth0 authentication.
@@ -71,14 +63,14 @@ class AuthController extends ControllerBase {
   /**
    * The logger.
    *
-   * @var \Psr\Log\LoggerInterface
+   * @var Psr\Log\LoggerInterface
    */
   protected $logger;
 
   /**
    * The config.
    *
-   * @var \Drupal\Core\Config\ImmutableConfig
+   * @var Drupal\Core\Config\ImmutableConfig
    */
   protected $config;
 
@@ -141,7 +133,7 @@ class AuthController extends ControllerBase {
   /**
    * The Auth0 helper.
    *
-   * @var \Drupal\auth0\Util\AuthHelper
+   * @var Drupal\auth0\Util\AuthHelper
    */
   protected $helper;
 
@@ -155,35 +147,35 @@ class AuthController extends ControllerBase {
   /**
    * Logger to log 'auth0' messages.
    *
-   * @var \Psr\Log\LoggerInterface
+   * @var Psr\Log\LoggerInterface
    */
   protected $auth0Logger;
 
   /**
    * The http client.
    *
-   * @var \GuzzleHttp\Client
+   * @var GuzzleHttp\Client
    */
   protected $httpClient;
 
   /**
    * Initialize the controller.
    *
-   * @param \Drupal\user\PrivateTempStoreFactory $temp_store_factory
+   * @param Drupal\Core\TempStore\PrivateTempStoreFactory $temp_store_factory
    *   The temp store factory.
-   * @param \Drupal\Core\Session\SessionManagerInterface $session_manager
+   * @param Drupal\Core\Session\SessionManagerInterface $session_manager
    *   The current session.
-   * @param \Drupal\Core\PageCache\ResponsePolicyInterface $page_cache
+   * @param Drupal\Core\PageCache\ResponsePolicyInterface $page_cache
    *   Page cache.
-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
+   * @param Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
    *   The logger factory.
-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
+   * @param Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
    *   The event dispatcher.
-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
+   * @param Drupal\Core\Config\ConfigFactoryInterface $config_factory
    *   The config factory.
-   * @param \Drupal\auth0\Util\AuthHelper $auth0_helper
+   * @param Drupal\auth0\Util\AuthHelper $auth0_helper
    *   The Auth0 helper.
-   * @param \GuzzleHttp\Client $http_client
+   * @param GuzzleHttp\Client $http_client
    *   The http client.
    */
   public function __construct(
@@ -194,7 +186,8 @@ class AuthController extends ControllerBase {
     EventDispatcherInterface $event_dispatcher,
     ConfigFactoryInterface $config_factory,
     AuthHelper $auth0_helper,
-    Client $http_client
+    Client $http_client,
+    Connection $connection
   ) {
     // Ensure the pages this controller servers never gets cached.
     $page_cache->trigger();
@@ -217,6 +210,7 @@ class AuthController extends ControllerBase {
     $this->offlineAccess = FALSE || $this->config->get(AuthController::AUTH0_OFFLINE_ACCESS);
     $this->httpClient = $http_client;
     $this->auth0 = FALSE;
+    $this->connection = $connection;
   }
 
   /**
@@ -224,24 +218,25 @@ class AuthController extends ControllerBase {
    */
   public static function create(ContainerInterface $container) {
     return new static(
-        $container->get('user.private_tempstore'),
+        $container->get('tempstore.private'),
         $container->get('session_manager'),
         $container->get('page_cache_kill_switch'),
         $container->get('logger.factory'),
         $container->get('event_dispatcher'),
         $container->get('config.factory'),
         $container->get('auth0.helper'),
-        $container->get('http_client')
+        $container->get('http_client'),
+        $container->get('database')
     );
   }
 
   /**
    * Handles the login page override.
    *
-   * @param \Symfony\Component\HttpFoundation\Request $request
+   * @param Symfony\Component\HttpFoundation\Request $request
    *   The current request.
    *
-   * @return array|\Drupal\Core\Routing\TrustedRedirectResponse
+   * @return array|Drupal\Core\Routing\TrustedRedirectResponse
    *   The redirect or a renderable array.
    */
   public function login(Request $request) {
@@ -290,7 +285,7 @@ class AuthController extends ControllerBase {
   /**
    * Handles the login page override.
    *
-   * @return \Drupal\Core\Routing\TrustedRedirectResponse
+   * @return Drupal\Core\Routing\TrustedRedirectResponse
    *   The response after logout.
    */
   public function logout() {
@@ -379,7 +374,7 @@ class AuthController extends ControllerBase {
    * @param string $returnTo
    *   The return url.
    *
-   * @return \Drupal\Core\Routing\TrustedRedirectResponse|RedirectResponse|null
+   * @return Drupal\Core\Routing\TrustedRedirectResponse|RedirectResponse|null
    *   The redirect response.
    */
   private function checkForError(Request $request, $returnTo) {
@@ -411,7 +406,7 @@ class AuthController extends ControllerBase {
    * @param \Symfony\Component\HttpFoundation\Request $request
    *   The current request.
    *
-   * @return \Drupal\Core\Routing\TrustedRedirectResponse|null|\Symfony\Component\HttpFoundation\RedirectResponse
+   * @return Drupal\Core\Routing\TrustedRedirectResponse|null|\Symfony\Component\HttpFoundation\RedirectResponse
    *   The redirect response.
    *
    * @throws \Auth0\SDK\Exception\CoreException
@@ -446,7 +441,7 @@ class AuthController extends ControllerBase {
     catch (\Exception $e) {
       return $this->failLogin(
         $problem_logging_in_msg,
-        $this->t('Failed to exchange code for tokens: @exception', ['@exception' => $e->getMessage()])
+        $this->t('Failed to exchange code for tokens: @exception.', ['@exception' => $e->getMessage()])
       );
     }
 
@@ -503,9 +498,9 @@ class AuthController extends ControllerBase {
    * @param array $userInfo
    *   The user information.
    *
-   * @throws \Drupal\auth0\Exception\EmailNotSetException
+   * @throws Drupal\auth0\Exception\EmailNotSetException
    *   When an email hasn't been set.
-   * @throws \Drupal\auth0\Exception\EmailNotVerifiedException
+   * @throws Drupal\auth0\Exception\EmailNotVerifiedException
    *   When an email hasn't been verified.
    */
   protected function validateUserEmail(array $userInfo) {
@@ -630,7 +625,7 @@ class AuthController extends ControllerBase {
    * @return bool|mixed
    *   The user object.
    *
-   * @throws \Drupal\auth0\Exception\EmailNotVerifiedException
+   * @throws Drupal\auth0\Exception\EmailNotVerifiedException
    *   The email not verified exception.
    * @throws \Exception
    */
@@ -718,7 +713,8 @@ class AuthController extends ControllerBase {
    * Get the auth0 user profile.
    */
   protected function findAuth0User($id) {
-    $auth0_user = db_select('auth0_user', 'a')
+    $auth0_user = $this->connection
+      ->select('auth0_user', 'a')
       ->fields('a', ['drupal_id'])
       ->condition('auth0_id', $id, '=')
       ->execute()
@@ -734,7 +730,8 @@ class AuthController extends ControllerBase {
    *   The user info array.
    */
   protected function updateAuth0User(array $userInfo) {
-    db_update('auth0_user')
+    $this->connection
+      ->update('auth0_user')
       ->fields([
         'auth0_object' => serialize($userInfo),
       ])
@@ -747,7 +744,7 @@ class AuthController extends ControllerBase {
    *
    * @param array $userInfo
    *   The user info array.
-   * @param \Drupal\user\Entity\User $user
+   * @param Drupal\user\Entity\User $user
    *   The Drupal user entity.
    */
   protected function auth0UpdateFieldsAndRoles(array $userInfo, User $user) {
@@ -764,7 +761,7 @@ class AuthController extends ControllerBase {
    *
    * @param array $userInfo
    *   The user info array.
-   * @param \Drupal\user\Entity\User $user
+   * @param Drupal\user\Entity\User $user
    *   The Drupal user entity.
    * @param array $edit
    *   The edit array.
@@ -815,7 +812,7 @@ class AuthController extends ControllerBase {
    *
    * @param array $userInfo
    *   The user info array.
-   * @param \Drupal\user\Entity\User $user
+   * @param Drupal\user\Entity\User $user
    *   The drupal user entity.
    * @param array $edit
    *   The edit array.
@@ -867,7 +864,7 @@ class AuthController extends ControllerBase {
           $this->auth0Logger->notice('no changes to roles detected');
           return;
       } 
-         
+
       $this->auth0Logger->notice('changes to roles detected');
       $edit['roles'] = $new_user_roles;
       
@@ -931,7 +928,8 @@ class AuthController extends ControllerBase {
    */
   protected function insertAuth0User(array $userInfo, $uid) {
 
-    db_insert('auth0_user')->fields([
+    $this->connection
+      ->insert('auth0_user')->fields([
       'auth0_id' => $userInfo['user_id'],
       'drupal_id' => $uid,
       'auth0_object' => json_encode($userInfo),
@@ -981,7 +979,7 @@ class AuthController extends ControllerBase {
    * @param array $userInfo
    *   The user info array.
    *
-   * @return \Drupal\user\Entity\User
+   * @return Drupal\user\Entity\User
    *   The Drupal user entity.
    *
    * @throws \Exception
